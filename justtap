@@ -1,0 +1,95 @@
+#!/usr/bin/env perl6
+use v6;
+use Pies;
+use Panda::Ecosystem;
+use Panda::Fetcher;
+use Panda::Builder;
+use Panda::Installer;
+use Panda::Resources;
+use Shell::Command;
+use Panda::Common;
+
+class Smoke::Tester does Pies::Tester {
+    has $!srcdir;
+    has $!tarballdir;
+
+    method test(Pies::Project $p) {
+        mkpath $!tarballdir;
+        indir "$!srcdir/{dirname $p.name}", {
+            if 'Makefile'.IO ~~ :f {
+                if $p.name eq $*TARGET {
+                    run 'make test'
+                         and die "'make test' failed for {$p.name}";
+                } else {
+                    run 'make test &> /dev/null'
+                         and die "'make test' failed for {$p.name}";
+                }
+            } elsif 't'.IO ~~ :d {
+                my $p6lib = "{cwd}/blib/lib:{cwd}/lib:{%*ENV<PERL6LIB>}";
+                my $c;
+                if $p.name eq $*TARGET {
+                    $c = "env PERL6LIB=$p6lib prove -ve perl6 -r t/";
+                } else {
+                    $c = "env PERL6LIB=$p6lib prove -e perl6 -r t/ "
+                         ~ "&> /dev/null";
+                }
+                run $c and die "Tests failed for {$p.name}";
+            }
+        };
+    }
+}
+
+class Smoker is Pies {
+    has $!srcdir;
+    has $!destdir;
+    has $!statefile;
+    has $!projectsfile;
+    has $!tarballdir;
+    has $!resources;
+
+    submethod BUILD {
+        callsame;
+        $!resources = Panda::Resources.new(
+            srcdir => $!srcdir
+        );
+        $!ecosystem = Panda::Ecosystem.new(
+            statefile    => $!statefile,
+            projectsfile => $!projectsfile,
+        );
+        $!fetcher   = Panda::Fetcher.new(resources => $!resources);
+        $!builder   = Panda::Builder.new(resources => $!resources);
+        $!tester    = Smoke::Tester.new(
+            srcdir => $!srcdir,
+            tarballdir => $!tarballdir,
+        );
+        $!installer = Panda::Installer.new(
+            resources => $!resources,
+            destdir => $!destdir
+        );
+    }
+}
+
+sub MAIN ($what) {
+    my $workdir  = "/tmp/smoker_{time}";
+    my $projects = 'projects.json';
+    my $cwd      = cwd;
+    my $tarball  = "{dirname $what}.popolnik";
+    my $smoke    = Smoker.new(
+        srcdir       => "$workdir/src",
+        destdir      => "$workdir/destdir",
+        statefile    => "$workdir/state",
+        projectsfile => "$workdir/projects.json",
+        tarballdir   => "$cwd/$tarball",
+    );
+    mkpath $workdir;
+    chdir $workdir;
+    run "wget -q http://feather.perl6.nl:3000/list -O $projects";
+    my $*TARGET = $what; # we're using a global because .resolve
+                         # only takes one argument, and we don't
+                         # want to test nothing besides the
+                         # target itself
+    $smoke.resolve($what);
+    run "rm -rf $workdir";
+}
+
+# vim: ft=perl6
